@@ -1,0 +1,1241 @@
+-- MM2 Custom Script | ESP, Aimbot (0 Smoothness), Auto Gun Pickup (2000), Kill All, Instant Menu & Right Badge
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Stats = game:GetService("Stats")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local AssetService = game:GetService("AssetService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Надёжный родитель для UI
+local function getGuiParent()
+	local ok, res = pcall(function()
+		if gethui then
+			return gethui()
+		end
+		return CoreGui
+	end)
+	if ok and res then
+		local testOk = pcall(function()
+			local f = Instance.new("Folder")
+			f.Parent = res
+			f:Destroy()
+		end)
+		if testOk then
+			return res
+		end
+	end
+	return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local GuiParent = getGuiParent()
+if GuiParent:FindFirstChild("MM2_SkullHub") then
+	GuiParent.MM2_SkullHub:Destroy()
+end
+
+-- ==========================================
+-- КОНФИГУРАЦИЯ
+-- ==========================================
+local Config = {
+	MenuOpen = true,
+	ESP = {
+		Enabled = true,
+		Boxes = true,
+		Names = true,
+		Health = true,
+		Chams = true
+	},
+	Aimbot = {
+		Enabled = false,
+		HoldRMB = true,
+		TargetRole = "Murderer", -- "Murderer", "Sheriff", "Closest"
+		TargetPart = "Head", -- "Head", "HumanoidRootPart"
+		Smoothness = 0, -- 0 = мгновенная наводка
+		FOV = 140,
+		ShowFOV = true
+	},
+	Movement = {
+		SpeedEnabled = false,
+		WalkSpeed = 25,
+		FlyEnabled = false,
+		FlySpeed = 55,
+		AntiFling = true
+	},
+	Misc = {
+		AutoPickupGun = true,
+		GunPickupDistance = 2000
+	}
+}
+
+-- Цвета ролей
+local RoleColors = {
+	Murderer = Color3.fromRGB(255, 55, 55),
+	Sheriff = Color3.fromRGB(55, 145, 255),
+	Innocent = Color3.fromRGB(65, 235, 110)
+}
+
+-- ==========================================
+-- ГЕНЕРАЦИЯ ИКОНКИ ЧЕРЕПА ПО ПИКСЕЛЯМ ФОТО
+-- ==========================================
+local SkullGrid16x16 = {
+	"BBBBBBBBBBBBBBBB",
+	"BBBBBRRRRRRRBBBB",
+	"BBBBRRDDDDDRRBBB",
+	"BBBRRDDDRRDDDRBB",
+	"BBRRDDDRRRRDDDRB",
+	"BBRRDDDRRRRDDDRB",
+	"BBRRDDDDDDDDDDRB",
+	"BBRRDDDRRDDDRDRB",
+	"BBRRDDDRRDDDRDRB",
+	"BBRRDDDDDDDDDDRB",
+	"BBBRRDDDRDDRRBBB",
+	"BBBBRRDDRDRRBBBB",
+	"BBBBRRDRDRDRBBBB",
+	"BBBBRRDDDDDRBBBB",
+	"BBBBBRRRRRRRBBBB",
+	"BBBBBBBBBBBBBBBB"
+}
+
+local Palette = {
+	B = Color3.fromRGB(16, 16, 18),
+	R = Color3.fromRGB(185, 18, 22),
+	D = Color3.fromRGB(115, 10, 14)
+}
+
+local function createSkullIcon(parentImageLabel)
+	local ok = pcall(function()
+		if AssetService and AssetService.CreateEditableImage then
+			local editable = AssetService:CreateEditableImage({ Size = Vector2.new(16, 16) })
+			local bufferData = {}
+			for y = 1, 16 do
+				local row = SkullGrid16x16[y]
+				for x = 1, 16 do
+					local ch = string.sub(row, x, x)
+					local col = Palette[ch] or Palette.B
+					local idx = ((y - 1) * 16 + (x - 1)) * 4
+					bufferData[idx + 1] = math.floor(col.R * 255)
+					bufferData[idx + 2] = math.floor(col.G * 255)
+					bufferData[idx + 3] = math.floor(col.B * 255)
+					bufferData[idx + 4] = 255
+				end
+			end
+			editable:WritePixelsBuffer(Vector2.zero, Vector2.new(16, 16), bufferData)
+			parentImageLabel.ImageContent = Content.fromObject(editable)
+			return
+		end
+		error("No EditableImage")
+	end)
+	if not ok then
+		parentImageLabel.Image = ""
+		local grid = Instance.new("Frame")
+		grid.Size = UDim2.fromScale(1, 1)
+		grid.BackgroundColor3 = Palette.B
+		grid.BorderSizePixel = 0
+		grid.Parent = parentImageLabel
+
+		local uigrid = Instance.new("UIGridLayout")
+		uigrid.CellSize = UDim2.fromScale(1 / 16, 1 / 16)
+		uigrid.CellPadding = UDim2.fromOffset(0, 0)
+		uigrid.SortOrder = Enum.SortOrder.LayoutOrder
+		uigrid.Parent = grid
+
+		for y = 1, 16 do
+			local row = SkullGrid16x16[y]
+			for x = 1, 16 do
+				local ch = string.sub(row, x, x)
+				local px = Instance.new("Frame")
+				px.BorderSizePixel = 0
+				px.BackgroundColor3 = Palette[ch] or Palette.B
+				px.LayoutOrder = (y - 1) * 16 + x
+				px.Parent = grid
+			end
+		end
+	end
+end
+
+-- ==========================================
+-- ОПРЕДЕЛЕНИЕ РОЛЕЙ И ОРУЖИЯ В MM2
+-- ==========================================
+local function hasItem(player, names)
+	local backpack = player:FindFirstChild("Backpack")
+	local char = player.Character
+	for _, name in ipairs(names) do
+		if backpack and backpack:FindFirstChild(name) then
+			return true
+		end
+		if char and char:FindFirstChild(name) then
+			return true
+		end
+	end
+	if backpack then
+		for _, tool in ipairs(backpack:GetChildren()) do
+			if tool:IsA("Tool") then
+				local n = string.lower(tool.Name)
+				for _, key in ipairs(names) do
+					if string.find(n, string.lower(key)) then
+						return true
+					end
+				end
+			end
+		end
+	end
+	if char then
+		for _, tool in ipairs(char:GetChildren()) do
+			if tool:IsA("Tool") then
+				local n = string.lower(tool.Name)
+				for _, key in ipairs(names) do
+					if string.find(n, string.lower(key)) then
+						return true
+					end
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function getPlayerRole(player)
+	if hasItem(player, { "Knife", "Murderer", "Нож" }) then
+		return "Murderer"
+	elseif hasItem(player, { "Gun", "Revolver", "Sheriff", "Пистолет" }) then
+		return "Sheriff"
+	end
+	return "Innocent"
+end
+
+local function getKnifeTool()
+	local char = LocalPlayer.Character
+	local backpack = LocalPlayer:FindFirstChild("Backpack")
+	local containers = { char, backpack }
+
+	for _, container in ipairs(containers) do
+		if container then
+			for _, tool in ipairs(container:GetChildren()) do
+				if tool:IsA("Tool") then
+					local n = string.lower(tool.Name)
+					if string.find(n, "knife") or string.find(n, "нож") then
+						return tool
+					end
+				end
+			end
+		end
+	end
+
+	-- Запасной вариант: если нож переименован в кастомный скин
+	for _, container in ipairs(containers) do
+		if container then
+			for _, tool in ipairs(container:GetChildren()) do
+				if tool:IsA("Tool") then
+					local n = string.lower(tool.Name)
+					if not (string.find(n, "gun") or string.find(n, "revolver") or string.find(n, "пистолет")) then
+						return tool
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+-- ==========================================
+-- АВТОПОДБОР ОРУЖИЯ (ДИСТАНЦИЯ 2000)
+-- ==========================================
+local function isDroppedGunPart(part)
+	if not part:IsA("BasePart") then return false end
+	if LocalPlayer.Character and part:IsDescendantOf(LocalPlayer.Character) then return false end
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr.Character and part:IsDescendantOf(plr.Character) then
+			return false
+		end
+	end
+	local nameLower = string.lower(part.Name)
+	local parentName = part.Parent and string.lower(part.Parent.Name) or ""
+	if nameLower == "gun" or nameLower == "gundrop" or string.find(nameLower, "gun") or parentName == "gun" or string.find(parentName, "gun") then
+		return true
+	end
+	return false
+end
+
+local function processAutoGunPickup()
+	if not Config.Misc.AutoPickupGun then return end
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if isDroppedGunPart(obj) then
+			local dist = (obj.Position - root.Position).Magnitude
+			if dist <= Config.Misc.GunPickupDistance then
+				pcall(function()
+					if firetouchinterest then
+						firetouchinterest(root, obj, 0)
+						firetouchinterest(root, obj, 1)
+					end
+					obj.CFrame = root.CFrame
+				end)
+			end
+		end
+	end
+end
+
+-- ==========================================
+-- СОЗДАНИЕ ИНТЕРФЕЙСА (INSTANT MENU + BADGE + NOTIFY)
+-- ==========================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MM2_SkullHub"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.Parent = GuiParent
+
+-- Уведомление
+local NotifyFrame = Instance.new("Frame")
+NotifyFrame.Name = "NotifyBanner"
+NotifyFrame.Size = UDim2.fromOffset(250, 42)
+NotifyFrame.Position = UDim2.new(0.5, 0, 1, -28)
+NotifyFrame.AnchorPoint = Vector2.new(0.5, 1)
+NotifyFrame.BackgroundColor3 = Color3.fromRGB(22, 16, 20)
+NotifyFrame.BorderSizePixel = 0
+NotifyFrame.Visible = false
+NotifyFrame.ZIndex = 40
+NotifyFrame.Parent = ScreenGui
+
+local NotifyCorner = Instance.new("UICorner")
+NotifyCorner.CornerRadius = UDim.new(0, 10)
+NotifyCorner.Parent = NotifyFrame
+
+local NotifyStroke = Instance.new("UIStroke")
+NotifyStroke.Color = Color3.fromRGB(225, 45, 55)
+NotifyStroke.Thickness = 1.5
+NotifyStroke.Parent = NotifyFrame
+
+local NotifyLabel = Instance.new("TextLabel")
+NotifyLabel.Size = UDim2.fromScale(1, 1)
+NotifyLabel.BackgroundTransparency = 1
+NotifyLabel.Text = ""
+NotifyLabel.TextColor3 = Color3.fromRGB(255, 85, 90)
+NotifyLabel.Font = Enum.Font.GothamBold
+NotifyLabel.TextSize = 13
+NotifyLabel.ZIndex = 41
+NotifyLabel.Parent = NotifyFrame
+
+local notifyToken = 0
+local function showNotification(msg)
+	notifyToken += 1
+	local currentToken = notifyToken
+	NotifyLabel.Text = msg
+	NotifyFrame.Visible = true
+	task.delay(2.2, function()
+		if notifyToken == currentToken then
+			NotifyFrame.Visible = false
+		end
+	end)
+end
+
+local function makeDraggable(frame, handle)
+	handle = handle or frame
+	local dragging = false
+	local dragStart, startPos
+	local moved = false
+
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType.Touch then
+			dragging = true
+			moved = false
+			dragStart = input.Position
+			startPos = frame.Position
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			if delta.Magnitude > 4 then
+				moved = true
+			end
+			frame.Position = UDim2.new(
+				startPos.X.Scale,
+				startPos.X.Offset + delta.X,
+				startPos.Y.Scale,
+				startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+
+	return function()
+		return moved
+	end
+end
+
+-- ПЛАВАЮЩИЙ БЕЙДЖ ("ФЕТЕРМАК") СПРАВА
+local BadgeFrame = Instance.new("Frame")
+BadgeFrame.Name = "FeatherBadge"
+BadgeFrame.Size = UDim2.fromOffset(258, 38)
+BadgeFrame.AnchorPoint = Vector2.new(1, 0)
+BadgeFrame.Position = UDim2.new(1, -18, 0, 18)
+BadgeFrame.BackgroundColor3 = Color3.fromRGB(17, 17, 21)
+BadgeFrame.BorderSizePixel = 0
+BadgeFrame.ZIndex = 20
+BadgeFrame.Parent = ScreenGui
+
+local BadgeCorner = Instance.new("UICorner")
+BadgeCorner.CornerRadius = UDim.new(0, 10)
+BadgeCorner.Parent = BadgeFrame
+
+local BadgeStroke = Instance.new("UIStroke")
+BadgeStroke.Color = Color3.fromRGB(165, 24, 28)
+BadgeStroke.Thickness = 1.4
+BadgeStroke.Parent = BadgeFrame
+
+local BadgeIcon = Instance.new("ImageLabel")
+BadgeIcon.Name = "SkullIcon"
+BadgeIcon.Size = UDim2.fromOffset(24, 24)
+BadgeIcon.Position = UDim2.fromOffset(7, 7)
+BadgeIcon.BackgroundColor3 = Color3.fromRGB(15, 15, 17)
+BadgeIcon.BorderSizePixel = 0
+BadgeIcon.ScaleType = Enum.ScaleType.Fit
+BadgeIcon.ZIndex = 21
+BadgeIcon.Parent = BadgeFrame
+
+local BadgeIconCorner = Instance.new("UICorner")
+BadgeIconCorner.CornerRadius = UDim.new(0, 5)
+BadgeIconCorner.Parent = BadgeIcon
+
+createSkullIcon(BadgeIcon)
+
+local BadgeInfo = Instance.new("TextLabel")
+BadgeInfo.Name = "InfoLabel"
+BadgeInfo.Size = UDim2.new(1, -38, 1, 0)
+BadgeInfo.Position = UDim2.fromOffset(36, 0)
+BadgeInfo.BackgroundTransparency = 1
+BadgeInfo.TextColor3 = Color3.fromRGB(238, 238, 245)
+BadgeInfo.TextSize = 11
+BadgeInfo.Font = Enum.Font.GothamBold
+BadgeInfo.TextXAlignment = Enum.TextXAlignment.Left
+BadgeInfo.TextTruncate = Enum.TextTruncate.AtEnd
+BadgeInfo.ZIndex = 21
+BadgeInfo.Text = LocalPlayer.Name .. " | FPS: 60 | Ping: 0ms"
+BadgeInfo.Parent = BadgeFrame
+
+local BadgeButton = Instance.new("TextButton")
+BadgeButton.Size = UDim2.fromScale(1, 1)
+BadgeButton.BackgroundTransparency = 1
+BadgeButton.Text = ""
+BadgeButton.ZIndex = 22
+BadgeButton.Parent = BadgeFrame
+
+-- ГЛАВНОЕ ОКНО МЕНЮ (БЕЗ ПЛАВНОЙ АНИМАЦИИ)
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainMenu"
+MainFrame.Size = UDim2.fromOffset(520, 355)
+MainFrame.Position = UDim2.fromScale(0.5, 0.5)
+MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+MainFrame.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+MainFrame.BorderSizePixel = 0
+MainFrame.Visible = Config.MenuOpen
+MainFrame.ZIndex = 10
+MainFrame.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 14)
+MainCorner.Parent = MainFrame
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(150, 22, 26)
+MainStroke.Thickness = 1.5
+MainStroke.Parent = MainFrame
+
+local TopBar = Instance.new("Frame")
+TopBar.Name = "TopBar"
+TopBar.Size = UDim2.new(1, 0, 0, 44)
+TopBar.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+TopBar.BorderSizePixel = 0
+TopBar.ZIndex = 11
+TopBar.Parent = MainFrame
+
+local TopCorner = Instance.new("UICorner")
+TopCorner.CornerRadius = UDim.new(0, 14)
+TopCorner.Parent = TopBar
+
+local TopFix = Instance.new("Frame")
+TopFix.Size = UDim2.new(1, 0, 0, 12)
+TopFix.Position = UDim2.new(0, 0, 1, -12)
+TopFix.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+TopFix.BorderSizePixel = 0
+TopFix.ZIndex = 11
+TopBar.Parent = MainFrame
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -90, 1, 0)
+TitleLabel.Position = UDim2.fromOffset(16, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "MM2 SKULL HUB"
+TitleLabel.TextColor3 = Color3.fromRGB(245, 70, 75)
+TitleLabel.Font = Enum.Font.GothamBlack
+TitleLabel.TextSize = 15
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.ZIndex = 12
+TitleLabel.Parent = TopBar
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.fromOffset(28, 28)
+CloseBtn.Position = UDim2.new(1, -36, 0.5, -14)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(155, 25, 30)
+CloseBtn.Text = "×"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 18
+CloseBtn.ZIndex = 12
+CloseBtn.Parent = TopBar
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 7)
+CloseCorner.Parent = CloseBtn
+
+local function setMenuState(state)
+	Config.MenuOpen = state
+	MainFrame.Visible = state
+	BadgeStroke.Color = state and Color3.fromRGB(165, 24, 28) or Color3.fromRGB(65, 225, 110)
+end
+
+CloseBtn.MouseButton1Click:Connect(function()
+	setMenuState(false)
+end)
+
+local wasDragged = makeDraggable(BadgeFrame, BadgeButton)
+makeDraggable(MainFrame, TopBar)
+
+BadgeButton.MouseButton1Click:Connect(function()
+	if not wasDragged() then
+		setMenuState(not Config.MenuOpen)
+	end
+end)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+	if not gp and input.KeyCode == Enum.KeyCode.RightShift then
+		setMenuState(not Config.MenuOpen)
+	end
+end)
+
+local Sidebar = Instance.new("Frame")
+Sidebar.Size = UDim2.fromOffset(135, 311)
+Sidebar.Position = UDim2.fromOffset(0, 44)
+Sidebar.BackgroundColor3 = Color3.fromRGB(19, 19, 24)
+Sidebar.BorderSizePixel = 0
+Sidebar.ZIndex = 11
+Sidebar.Parent = MainFrame
+
+local SideList = Instance.new("UIListLayout")
+SideList.Padding = UDim.new(0, 6)
+SideList.Parent = Sidebar
+
+local SidePad = Instance.new("UIPadding")
+SidePad.PaddingTop = UDim.new(0, 10)
+SidePad.PaddingLeft = UDim.new(0, 8)
+SidePad.PaddingRight = UDim.new(0, 8)
+SidePad.Parent = Sidebar
+
+local ContentArea = Instance.new("Frame")
+ContentArea.Size = UDim2.new(1, -145, 1, -54)
+ContentArea.Position = UDim2.fromOffset(140, 49)
+ContentArea.BackgroundTransparency = 1
+ContentArea.ZIndex = 11
+ContentArea.Parent = MainFrame
+
+local pages = {}
+local tabButtons = {}
+
+local function createPage(name)
+	local page = Instance.new("ScrollingFrame")
+	page.Name = name
+	page.Size = UDim2.fromScale(1, 1)
+	page.BackgroundTransparency = 1
+	page.ScrollBarThickness = 4
+	page.ScrollBarImageColor3 = Color3.fromRGB(165, 24, 28)
+	page.CanvasSize = UDim2.fromOffset(0, 0)
+	page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	page.Visible = false
+	page.ZIndex = 12
+	page.Parent = ContentArea
+
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, 8)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = page
+
+	local pad = Instance.new("UIPadding")
+	pad.PaddingRight = UDim.new(0, 6)
+	pad.PaddingBottom = UDim.new(0, 8)
+	pad.Parent = page
+
+	pages[name] = page
+	return page
+end
+
+local function selectTab(name)
+	for k, p in pairs(pages) do
+		p.Visible = (k == name)
+	end
+	for k, b in pairs(tabButtons) do
+		b.BackgroundColor3 = (k == name) and Color3.fromRGB(155, 25, 30) or Color3.fromRGB(27, 27, 34)
+		b.TextColor3 = (k == name) and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(185, 185, 198)
+	end
+end
+
+local function addTabButton(name, order)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, 0, 0, 34)
+	btn.LayoutOrder = order
+	btn.BackgroundColor3 = Color3.fromRGB(27, 27, 34)
+	btn.Text = name
+	btn.TextColor3 = Color3.fromRGB(185, 185, 198)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 12
+	btn.ZIndex = 12
+	btn.Parent = Sidebar
+
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 8)
+	c.Parent = btn
+
+	tabButtons[name] = btn
+	btn.MouseButton1Click:Connect(function()
+		selectTab(name)
+	end)
+end
+
+local function createToggle(parent, text, default, order, callback)
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 36)
+	row.LayoutOrder = order
+	row.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+	row.BorderSizePixel = 0
+	row.ZIndex = 12
+	row.Parent = parent
+
+	local rc = Instance.new("UICorner")
+	rc.CornerRadius = UDim.new(0, 8)
+	rc.Parent = row
+
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(1, -60, 1, 0)
+	lbl.Position = UDim2.fromOffset(12, 0)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = text
+	lbl.TextColor3 = Color3.fromRGB(235, 235, 242)
+	lbl.Font = Enum.Font.GothamSemibold
+	lbl.TextSize = 12
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.ZIndex = 13
+	lbl.Parent = row
+
+	local state = default
+	local pill = Instance.new("TextButton")
+	pill.Size = UDim2.fromOffset(42, 22)
+	pill.Position = UDim2.new(1, -50, 0.5, -11)
+	pill.BackgroundColor3 = state and Color3.fromRGB(175, 28, 34) or Color3.fromRGB(45, 45, 56)
+	pill.Text = state and "ON" or "OFF"
+	pill.TextColor3 = Color3.fromRGB(255, 255, 255)
+	pill.Font = Enum.Font.GothamBold
+	pill.TextSize = 10
+	pill.ZIndex = 13
+	pill.Parent = row
+
+	local pc = Instance.new("UICorner")
+	pc.CornerRadius = UDim.new(1, 0)
+	pc.Parent = pill
+
+	pill.MouseButton1Click:Connect(function()
+		state = not state
+		pill.Text = state and "ON" or "OFF"
+		pill.BackgroundColor3 = state and Color3.fromRGB(175, 28, 34) or Color3.fromRGB(45, 45, 56)
+		if callback then
+			callback(state)
+		end
+	end)
+end
+
+local function createSlider(parent, text, minVal, maxVal, default, order, callback)
+	local box = Instance.new("Frame")
+	box.Size = UDim2.new(1, 0, 0, 48)
+	box.LayoutOrder = order
+	box.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+	box.BorderSizePixel = 0
+	box.ZIndex = 12
+	box.Parent = parent
+
+	local bc = Instance.new("UICorner")
+	bc.CornerRadius = UDim.new(0, 8)
+	bc.Parent = box
+
+	local val = default
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(1, -24, 0, 20)
+	lbl.Position = UDim2.fromOffset(12, 4)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = text .. ": " .. tostring(val)
+	lbl.TextColor3 = Color3.fromRGB(235, 235, 242)
+	lbl.Font = Enum.Font.GothamSemibold
+	lbl.TextSize = 12
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.ZIndex = 13
+	lbl.Parent = box
+
+	local bar = Instance.new("Frame")
+	bar.Size = UDim2.new(1, -24, 0, 6)
+	bar.Position = UDim2.fromOffset(12, 32)
+	bar.BackgroundColor3 = Color3.fromRGB(45, 45, 56)
+	bar.BorderSizePixel = 0
+	bar.ZIndex = 13
+	bar.Parent = box
+
+	local barC = Instance.new("UICorner")
+	barC.CornerRadius = UDim.new(1, 0)
+	barC.Parent = bar
+
+	local fill = Instance.new("Frame")
+	local initRatio = math.clamp((val - minVal) / (maxVal - minVal), 0, 1)
+	fill.Size = UDim2.fromScale(initRatio, 1)
+	fill.BackgroundColor3 = Color3.fromRGB(185, 30, 36)
+	fill.BorderSizePixel = 0
+	fill.ZIndex = 14
+	fill.Parent = bar
+
+	local fillC = Instance.new("UICorner")
+	fillC.CornerRadius = UDim.new(1, 0)
+	fillC.Parent = fill
+
+	local sliding = false
+	local function updateFromX(xPos)
+		local rel = math.clamp((xPos - bar.AbsolutePosition.X) / math.max(bar.AbsoluteSize.X, 1), 0, 1)
+		local newVal = math.floor(minVal + (maxVal - minVal) * rel + 0.5)
+		val = newVal
+		fill.Size = UDim2.fromScale(rel, 1)
+		lbl.Text = text .. ": " .. tostring(val)
+		if callback then
+			callback(val)
+		end
+	end
+
+	bar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType.Touch then
+			sliding = true
+			updateFromX(input.Position.X)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType.Touch) then
+			updateFromX(input.Position.X)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType.Touch then
+			sliding = false
+		end
+	end)
+end
+
+local function createCycleButton(parent, text, options, defaultIdx, order, callback)
+	local idx = defaultIdx or 1
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, 0, 0, 36)
+	btn.LayoutOrder = order
+	btn.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+	btn.Text = text .. ": " .. options[idx]
+	btn.TextColor3 = Color3.fromRGB(240, 240, 248)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 12
+	btn.ZIndex = 12
+	btn.Parent = parent
+
+	local bc = Instance.new("UICorner")
+	bc.CornerRadius = UDim.new(0, 8)
+	bc.Parent = btn
+
+	btn.MouseButton1Click:Connect(function()
+		idx = (idx % #options) + 1
+		btn.Text = text .. ": " .. options[idx]
+		if callback then
+			callback(options[idx])
+		end
+	end)
+end
+
+local function createActionButton(parent, text, order, callback)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, 0, 0, 38)
+	btn.LayoutOrder = order
+	btn.BackgroundColor3 = Color3.fromRGB(155, 25, 30)
+	btn.Text = text
+	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 12
+	btn.ZIndex = 12
+	btn.Parent = parent
+
+	local bc = Instance.new("UICorner")
+	bc.CornerRadius = UDim.new(0, 8)
+	bc.Parent = btn
+
+	btn.MouseButton1Click:Connect(function()
+		if callback then
+			callback()
+		end
+	end)
+end
+
+addTabButton("ESP", 1)
+addTabButton("Aimbot", 2)
+addTabButton("Movement", 3)
+addTabButton("Misc", 4)
+
+local espPage = createPage("ESP")
+local aimPage = createPage("Aimbot")
+local movePage = createPage("Movement")
+local miscPage = createPage("Misc")
+selectTab("ESP")
+
+createToggle(espPage, "ESP Master (Вкл/Выкл)", Config.ESP.Enabled, 1, function(v) Config.ESP.Enabled = v end)
+createToggle(espPage, "Box ESP (Боксы)", Config.ESP.Boxes, 2, function(v) Config.ESP.Boxes = v end)
+createToggle(espPage, "Name + Role ESP (Ник и роль)", Config.ESP.Names, 3, function(v) Config.ESP.Names = v end)
+createToggle(espPage, "Health ESP (Здоровье)", Config.ESP.Health, 4, function(v) Config.ESP.Health = v end)
+createToggle(espPage, "Chams (Подсветка сквозь стены)", Config.ESP.Chams, 5, function(v) Config.ESP.Chams = v end)
+
+createToggle(aimPage, "Aimbot (Аимбот)", Config.Aimbot.Enabled, 1, function(v) Config.Aimbot.Enabled = v end)
+createToggle(aimPage, "Hold RMB to Aim (Наводка на ПКМ)", Config.Aimbot.HoldRMB, 2, function(v) Config.Aimbot.HoldRMB = v end)
+createCycleButton(aimPage, "Target Role", { "Murderer", "Sheriff", "Closest" }, 1, 3, function(opt) Config.Aimbot.TargetRole = opt end)
+createCycleButton(aimPage, "Target Part", { "Head", "HumanoidRootPart" }, 1, 4, function(opt) Config.Aimbot.TargetPart = opt end)
+createSlider(aimPage, "Smoothness (Плавность %)", 0, 100, math.floor(Config.Aimbot.Smoothness * 100), 5, function(v)
+	Config.Aimbot.Smoothness = v / 100
+end)
+createSlider(aimPage, "FOV Radius", 30, 400, Config.Aimbot.FOV, 6, function(v) Config.Aimbot.FOV = v end)
+createToggle(aimPage, "Show FOV Circle", Config.Aimbot.ShowFOV, 7, function(v) Config.Aimbot.ShowFOV = v end)
+
+createToggle(movePage, "Fast Run (Быстрый бег)", Config.Movement.SpeedEnabled, 1, function(v) Config.Movement.SpeedEnabled = v end)
+createSlider(movePage, "WalkSpeed", 16, 65, Config.Movement.WalkSpeed, 2, function(v) Config.Movement.WalkSpeed = v end)
+createToggle(movePage, "Fly (Полёт: WASD + Space/Ctrl)", Config.Movement.FlyEnabled, 3, function(v) Config.Movement.FlyEnabled = v end)
+createSlider(movePage, "Fly Speed", 20, 140, Config.Movement.FlySpeed, 4, function(v) Config.Movement.FlySpeed = v end)
+createToggle(movePage, "Anti-Fling (Анти-флинг)", Config.Movement.AntiFling, 5, function(v) Config.Movement.AntiFling = v end)
+
+createToggle(miscPage, "Auto Pickup Gun (Авто подбор)", Config.Misc.AutoPickupGun, 1, function(v) Config.Misc.AutoPickupGun = v end)
+createSlider(miscPage, "Pickup Distance (Дистанция)", 50, 2000, Config.Misc.GunPickupDistance, 2, function(v)
+	Config.Misc.GunPickupDistance = v
+end)
+
+local killingAll = false
+createActionButton(miscPage, "Kill All (Только Убийца)", 3, function()
+	if getPlayerRole(LocalPlayer) ~= "Murderer" then
+		showNotification("ты не убийца")
+		return
+	end
+	if killingAll then return end
+
+	local char = LocalPlayer.Character
+	local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local knife = getKnifeTool()
+
+	if not myRoot or not hum then return end
+	if not knife then
+		showNotification("ты не убийца")
+		return
+	end
+
+	killingAll = true
+	task.spawn(function()
+		pcall(function()
+			hum:EquipTool(knife)
+		end)
+		task.wait(0.08)
+
+		local savedCFrame = myRoot.CFrame
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= LocalPlayer and plr.Character then
+				local tRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+				local tHum = plr.Character:FindFirstChildOfClass("Humanoid")
+				if tRoot and tHum and tHum.Health > 0 then
+					pcall(function()
+						myRoot.CFrame = tRoot.CFrame * CFrame.new(0, 0, 1.5)
+						knife:Activate()
+						local hitPart = plr.Character:FindFirstChild("Head") or tRoot
+						if firetouchinterest then
+							for _, part in ipairs(knife:GetDescendants()) do
+								if part:IsA("BasePart") then
+									firetouchinterest(part, hitPart, 0)
+									firetouchinterest(part, hitPart, 1)
+								end
+							end
+						end
+					end)
+					task.wait(0.14)
+				end
+			end
+		end
+
+		pcall(function()
+			myRoot.CFrame = savedCFrame
+		end)
+		killingAll = false
+	end)
+end)
+
+-- ==========================================
+-- СИСТЕМА ESP (BOX + NAME + HEALTH + CHAMS)
+-- ==========================================
+local hasDrawing = pcall(function()
+	local d = Drawing.new("Square")
+	d:Remove()
+end)
+local espObjects = {}
+
+local function createEspEntry(player)
+	if player == LocalPlayer then return end
+	local entry = {
+		Player = player,
+		Highlight = Instance.new("Highlight"),
+		Box = hasDrawing and Drawing.new("Square") or nil,
+		BoxOutline = hasDrawing and Drawing.new("Square") or nil,
+		HpBack = hasDrawing and Drawing.new("Line") or nil,
+		HpBar = hasDrawing and Drawing.new("Line") or nil,
+		Tag = hasDrawing and Drawing.new("Text") or nil
+	}
+
+	entry.Highlight.Name = "MM2_Chams"
+	entry.Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	entry.Highlight.FillTransparency = 0.55
+	entry.Highlight.OutlineTransparency = 0
+	entry.Highlight.Parent = ScreenGui
+
+	if hasDrawing then
+		entry.BoxOutline.Thickness = 2.5
+		entry.BoxOutline.Color = Color3.new(0, 0, 0)
+		entry.BoxOutline.Filled = false
+		entry.BoxOutline.Visible = false
+
+		entry.Box.Thickness = 1.2
+		entry.Box.Filled = false
+		entry.Box.Visible = false
+
+		entry.HpBack.Thickness = 3.5
+		entry.HpBack.Color = Color3.new(0, 0, 0)
+		entry.HpBack.Visible = false
+
+		entry.HpBar.Thickness = 2
+		entry.HpBar.Visible = false
+
+		entry.Tag.Size = 13
+		entry.Tag.Center = true
+		entry.Tag.Outline = true
+		entry.Tag.Color = Color3.new(1, 1, 1)
+		entry.Tag.Visible = false
+	end
+
+	espObjects[player] = entry
+end
+
+local function removeEspEntry(player)
+	local entry = espObjects[player]
+	if not entry then return end
+	if entry.Highlight then entry.Highlight:Destroy() end
+	if hasDrawing then
+		pcall(function()
+			entry.Box:Remove()
+			entry.BoxOutline:Remove()
+			entry.HpBack:Remove()
+			entry.HpBar:Remove()
+			entry.Tag:Remove()
+		end)
+	end
+	espObjects[player] = nil
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+	createEspEntry(p)
+end
+Players.PlayerAdded:Connect(createEspEntry)
+Players.PlayerRemoving:Connect(removeEspEntry)
+
+local function hideEspEntry(entry)
+	entry.Highlight.Adornee = nil
+	entry.Highlight.Enabled = false
+	if hasDrawing then
+		entry.Box.Visible = false
+		entry.BoxOutline.Visible = false
+		entry.HpBack.Visible = false
+		entry.HpBar.Visible = false
+		entry.Tag.Visible = false
+	end
+end
+
+-- ==========================================
+-- FOV КРУГ И АИМБОТ
+-- ==========================================
+local fovCircle = hasDrawing and Drawing.new("Circle") or nil
+if fovCircle then
+	fovCircle.Thickness = 1.5
+	fovCircle.NumSides = 64
+	fovCircle.Filled = false
+	fovCircle.Color = Color3.fromRGB(255, 70, 75)
+	fovCircle.Visible = false
+end
+
+local function getBestTarget()
+	local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+	local bestPart = nil
+	local bestDist = Config.Aimbot.FOV
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character then
+			local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+			local part = plr.Character:FindFirstChild(Config.Aimbot.TargetPart) or plr.Character:FindFirstChild("HumanoidRootPart")
+			if hum and hum.Health > 0 and part then
+				local role = getPlayerRole(plr)
+				local roleOk = (Config.Aimbot.TargetRole == "Closest") or (role == Config.Aimbot.TargetRole)
+				if roleOk then
+					local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+					if onScreen then
+						local d = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+						if d <= bestDist then
+							bestDist = d
+							bestPart = part
+						end
+					end
+				end
+			end
+		end
+	end
+	return bestPart
+end
+
+-- ==========================================
+-- ДВИЖЕНИЕ (SPEED 25, FLY, ANTI-FLING)
+-- ==========================================
+local flyBV, flyBG
+
+local function updateFlight(dt)
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+	if not Config.Movement.FlyEnabled or not root or not hum then
+		if flyBV then flyBV:Destroy(); flyBV = nil end
+		if flyBG then flyBG:Destroy(); flyBG = nil end
+		if hum and hum.PlatformStand then
+			hum.PlatformStand = false
+		end
+		return
+	end
+
+	hum.PlatformStand = true
+	if not flyBV then
+		flyBV = Instance.new("BodyVelocity")
+		flyBV.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+		flyBV.Parent = root
+	end
+	if not flyBG then
+		flyBG = Instance.new("BodyGyro")
+		flyBG.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
+		flyBG.P = 3000
+		flyBG.Parent = root
+	end
+
+	local dir = Vector3.zero
+	local cf = Camera.CFrame
+	if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir += cf.LookVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir -= cf.LookVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir += cf.RightVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir -= cf.RightVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir += Vector3.yAxis end
+	if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir -= Vector3.yAxis end
+
+	if dir.Magnitude > 0 then
+		dir = dir.Unit * Config.Movement.FlySpeed
+	end
+
+	flyBV.Velocity = dir
+	flyBG.CFrame = cf
+end
+
+local function applyAntiFling()
+	if not Config.Movement.AntiFling then return end
+	local myChar = LocalPlayer.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character then
+			for _, part in ipairs(plr.Character:GetDescendants()) do
+				if part:IsA("BasePart") then
+					part.CanCollide = false
+					if part.AssemblyLinearVelocity.Magnitude > 140 or part.AssemblyAngularVelocity.Magnitude > 80 then
+						part.AssemblyLinearVelocity = Vector3.zero
+						part.AssemblyAngularVelocity = Vector3.zero
+					end
+				end
+			end
+		end
+	end
+
+	if myRoot then
+		if myRoot.AssemblyLinearVelocity.Magnitude > 160 then
+			myRoot.AssemblyLinearVelocity = Vector3.zero
+		end
+		if myRoot.AssemblyAngularVelocity.Magnitude > 90 then
+			myRoot.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+end
+
+-- ==========================================
+-- ГЛАВНЫЙ ЦИКЛ ОБНОВЛЕНИЯ
+-- ==========================================
+local fpsAccumulator = 0
+local frameCount = 0
+local currentFps = 60
+
+RunService.RenderStepped:Connect(function(dt)
+	fpsAccumulator += dt
+	frameCount += 1
+	if fpsAccumulator >= 0.4 then
+		currentFps = math.floor(frameCount / fpsAccumulator + 0.5)
+		fpsAccumulator = 0
+		frameCount = 0
+	end
+
+	local pingMs = 0
+	pcall(function()
+		pingMs = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue() + 0.5)
+	end)
+	BadgeInfo.Text = string.format("%s | FPS: %d | Ping: %dms", LocalPlayer.Name, currentFps, pingMs)
+
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and hum.Health > 0 then
+		if Config.Movement.SpeedEnabled and not Config.Movement.FlyEnabled then
+			hum.WalkSpeed = Config.Movement.WalkSpeed
+		elseif not Config.Movement.SpeedEnabled and hum.WalkSpeed == Config.Movement.WalkSpeed then
+			hum.WalkSpeed = 16
+		end
+	end
+
+	updateFlight(dt)
+	applyAntiFling()
+	processAutoGunPickup()
+
+	for plr, entry in pairs(espObjects) do
+		local pChar = plr.Character
+		local pHum = pChar and pChar:FindFirstChildOfClass("Humanoid")
+		local pRoot = pChar and pChar:FindFirstChild("HumanoidRootPart")
+
+		if not Config.ESP.Enabled or not pChar or not pHum or not pRoot or pHum.Health <= 0 then
+			hideEspEntry(entry)
+		else
+			local role = getPlayerRole(plr)
+			local col = RoleColors[role] or RoleColors.Innocent
+
+			if Config.ESP.Chams then
+				entry.Highlight.Adornee = pChar
+				entry.Highlight.FillColor = col
+				entry.Highlight.OutlineColor = col
+				entry.Highlight.Enabled = true
+			else
+				entry.Highlight.Enabled = false
+			end
+
+			if hasDrawing then
+				local rootPos, onScreen = Camera:WorldToViewportPoint(pRoot.Position)
+				local topPos = Camera:WorldToViewportPoint(pRoot.Position + Vector3.new(0, 3.1, 0))
+				local botPos = Camera:WorldToViewportPoint(pRoot.Position - Vector3.new(0, 3.2, 0))
+
+				if not onScreen then
+					entry.Box.Visible = false
+					entry.BoxOutline.Visible = false
+					entry.HpBack.Visible = false
+					entry.HpBar.Visible = false
+					entry.Tag.Visible = false
+				else
+					local height = math.max(math.abs(topPos.Y - botPos.Y), 12)
+					local width = height * 0.58
+					local boxX = rootPos.X - width / 2
+					local boxY = topPos.Y
+
+					if Config.ESP.Boxes then
+						entry.BoxOutline.Size = Vector2.new(width, height)
+						entry.BoxOutline.Position = Vector2.new(boxX, boxY)
+						entry.BoxOutline.Visible = true
+
+						entry.Box.Size = Vector2.new(width, height)
+						entry.Box.Position = Vector2.new(boxX, boxY)
+						entry.Box.Color = col
+						entry.Box.Visible = true
+					else
+						entry.Box.Visible = false
+						entry.BoxOutline.Visible = false
+					end
+
+					if Config.ESP.Health then
+						local hpRatio = math.clamp(pHum.Health / math.max(pHum.MaxHealth, 1), 0, 1)
+						local barX = boxX - 6
+						entry.HpBack.From = Vector2.new(barX, boxY)
+						entry.HpBack.To = Vector2.new(barX, boxY + height)
+						entry.HpBack.Visible = true
+
+						entry.HpBar.From = Vector2.new(barX, boxY + height * (1 - hpRatio))
+						entry.HpBar.To = Vector2.new(barX, boxY + height)
+						entry.HpBar.Color = Color3.fromRGB(255 * (1 - hpRatio), 255 * hpRatio, 60)
+						entry.HpBar.Visible = true
+					else
+						entry.HpBack.Visible = false
+						entry.HpBar.Visible = false
+					end
+
+					if Config.ESP.Names then
+						local roleRu = (role == "Murderer" and "Убийца") or (role == "Sheriff" and "Шериф") or "Невиновен"
+						entry.Tag.Text = string.format("%s [%s]", plr.Name, roleRu)
+						entry.Tag.Position = Vector2.new(rootPos.X, boxY - 16)
+						entry.Tag.Color = col
+						entry.Tag.Visible = true
+					else
+						entry.Tag.Visible = false
+					end
+				end
+			end
+		end
+	end
+
+	if fovCircle then
+		if Config.Aimbot.Enabled and Config.Aimbot.ShowFOV then
+			fovCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+			fovCircle.Radius = Config.Aimbot.FOV
+			fovCircle.Visible = true
+		else
+			fovCircle.Visible = false
+		end
+	end
+
+	if Config.Aimbot.Enabled then
+		local holdingOk = (not Config.Aimbot.HoldRMB) or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+		if holdingOk then
+			local targetPart = getBestTarget()
+			if targetPart then
+				local targetCF = CFrame.lookAt(Camera.CFrame.Position, targetPart.Position)
+				if Config.Aimbot.Smoothness <= 0 then
+					Camera.CFrame = targetCF
+				else
+					Camera.CFrame = Camera.CFrame:Lerp(targetCF, math.clamp(Config.Aimbot.Smoothness, 0.01, 1))
+				end
+			end
+		end
+	end
+end)
